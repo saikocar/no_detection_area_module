@@ -16,7 +16,6 @@ find_package(visualization_msgs REQUIRED)
 find_package(autoware_auto_mapping_msgs REQUIRED)
 find_package(autoware_auto_perception_msgs REQUIRED)
 find_package(autoware_planning_msgs REQUIRED)
-find_package(tier4_perception_msgs REQUIRED)
 
 find_package(lanelet2_core REQUIRED)
 find_package(lanelet2_io REQUIRED)
@@ -35,7 +34,6 @@ ament_target_dependencies(object_exclude_on_lanelet_filter
   autoware_auto_mapping_msgs
   autoware_auto_perception_msgs
   autoware_planning_msgs
-  tier4_perception_msgs
   lanelet2_core
   lanelet2_io
   lanelet2_projection

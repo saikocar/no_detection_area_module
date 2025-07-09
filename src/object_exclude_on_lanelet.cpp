@@ -8,7 +8,6 @@
 #include <lanelet2_core/geometry/Point.h>
 
 #include <autoware_auto_mapping_msgs/msg/had_map_bin.hpp>
-#include <tier4_perception_msgs/msg/detected_objects_with_feature.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <autoware_auto_perception_msgs/msg/detected_objects.hpp>
 
@@ -28,8 +27,6 @@
 
 using std::placeholders::_1;
 using lanelet::LaneletMapPtr;
-using tier4_perception_msgs::msg::DetectedObjectsWithFeature;
-using tier4_perception_msgs::msg::DetectedObjectWithFeature;
 
 class ObjectExcludeOnLaneletChecker : public rclcpp::Node, public std::enable_shared_from_this<ObjectExcludeOnLaneletChecker> {
 public:
@@ -62,7 +59,7 @@ public:
     map_sub_ = create_subscription<autoware_auto_mapping_msgs::msg::HADMapBin>(
       map_topic_, rclcpp::QoS(1).transient_local().reliable(), std::bind(&ObjectExcludeOnLaneletChecker::mapCallback, this, _1));
 
-    object_sub_ = create_subscription<DetectedObjectsWithFeature>(
+    object_sub_ = create_subscription<autoware_auto_perception_msgs::msg::DetectedObjects>(
       input_objects_topic_, rclcpp::QoS(10), std::bind(&ObjectExcludeOnLaneletChecker::objectCallback, this, _1));
 
     object_pub_ = create_publisher<autoware_auto_perception_msgs::msg::DetectedObjects>(output_objects_topic_, 10);
@@ -73,7 +70,7 @@ private:
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp::Subscription<autoware_auto_mapping_msgs::msg::HADMapBin>::SharedPtr map_sub_;
-  rclcpp::Subscription<DetectedObjectsWithFeature>::SharedPtr object_sub_;
+  rclcpp::Subscription<autoware_auto_perception_msgs::msg::DetectedObjects>::SharedPtr object_sub_;
   rclcpp::Publisher<autoware_auto_perception_msgs::msg::DetectedObjects>::SharedPtr object_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
   std::unordered_set<int64_t> excluded_labels_;
@@ -93,7 +90,7 @@ private:
     return lanelet::geometry::within(pt, lanelet.polygon2d());
   }
 
-  void objectCallback(const DetectedObjectsWithFeature::ConstSharedPtr msg) {
+  void objectCallback(const autoware_auto_perception_msgs::msg::DetectedObjects::ConstSharedPtr msg) {
     if (!lanelet_map_) return;
 
     autoware_auto_perception_msgs::msg::DetectedObjects objects_filtered;
@@ -101,9 +98,7 @@ private:
     visualization_msgs::msg::MarkerArray markers;
     int marker_id = 0;
 
-    for (const auto& obj_with_feature : msg->feature_objects) {
-      const auto & obj = obj_with_feature.object;
-
+    for (const auto& obj : msg->objects) {
       geometry_msgs::msg::PoseStamped input_pose, map_pose;
       input_pose.header = msg->header;
       input_pose.pose = obj.kinematics.pose_with_covariance.pose;
