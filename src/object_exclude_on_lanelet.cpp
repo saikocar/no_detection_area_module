@@ -23,6 +23,8 @@
 #include <boost/geometry/geometries/polygon.hpp>
 #include <boost/geometry/geometries/point_xy.hpp>
 
+#include <Eigen/Geometry>  // Eigen::Vector3d, Eigen::Quaterniond
+
 #include <iterator>
 
 using std::placeholders::_1;
@@ -110,15 +112,51 @@ private:
         continue;
       }
 
-      lanelet::BasicPoint2d pt(map_pose.pose.position.x, map_pose.pose.position.y);
       bool inside_subtype = false;
-      for (const auto& lanelet : lanelet_map_->laneletLayer) {
-        if (isInsideTargetLanelet(lanelet, pt)) {
-          inside_subtype = true;
-          break;
+      if (obj.shape.type == autoware_auto_perception_msgs::msg::Shape::BOUNDING_BOX) {
+        // --- BOX の8隅を使った判定 ---
+        const auto& dims = obj.shape.dimensions;
+        const double x = dims.x / 2.0;
+        const double y = dims.y / 2.0;
+        const double z = dims.z / 2.0;
+
+        // ローカル8隅座標（XY平面のみ使う）
+        std::vector<Eigen::Vector3d> corners_local = {
+          { x,  y,  z}, { x, -y,  z}, {-x,  y,  z}, {-x, -y,  z},
+          { x,  y, -z}, { x, -y, -z}, {-x,  y, -z}, {-x, -y, -z}
+        };
+
+        // poseの回転と位置を行列に変換
+        Eigen::Quaterniond q(map_pose.pose.orientation.w,
+                            map_pose.pose.orientation.x,
+                            map_pose.pose.orientation.y,
+                            map_pose.pose.orientation.z);
+        Eigen::Vector3d trans(map_pose.pose.position.x,
+                              map_pose.pose.position.y,
+                              map_pose.pose.position.z);
+
+        for (const auto& corner_local : corners_local) {
+          Eigen::Vector3d corner_world = q * corner_local + trans;
+          lanelet::BasicPoint2d pt(corner_world.x(), corner_world.y());
+
+          for (const auto& lanelet : lanelet_map_->laneletLayer) {
+            if (isInsideTargetLanelet(lanelet, pt)) {
+              inside_subtype = true;
+              break;
+            }
+          }
+          if (inside_subtype) break; // 一つでも入っていればよい
+        }
+      } else {
+        // --- 重心のみで判定 ---
+        lanelet::BasicPoint2d pt(map_pose.pose.position.x, map_pose.pose.position.y);
+        for (const auto& lanelet : lanelet_map_->laneletLayer) {
+          if (isInsideTargetLanelet(lanelet, pt)) {
+            inside_subtype = true;
+            break;
+          }
         }
       }
-
       // ラベル除外判定
       bool label_excluded = false;
       if (!obj.classification.empty()) {
