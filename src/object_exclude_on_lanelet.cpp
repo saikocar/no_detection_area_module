@@ -32,7 +32,10 @@ using lanelet::LaneletMapPtr;
 
 class ObjectExcludeOnLaneletChecker : public rclcpp::Node, public std::enable_shared_from_this<ObjectExcludeOnLaneletChecker> {
 public:
-  ObjectExcludeOnLaneletChecker() : Node("object_exclude_on_lanelet_checker") {
+  ObjectExcludeOnLaneletChecker() : Node("object_exclude_on_lanelet_checker")
+    , tf_buffer_(this->get_clock())
+    , tf_listener_(tf_buffer_)
+  {
     declare_parameter<std::string>("map_topic", "/map/vector_map");
     declare_parameter<std::string>("input_objects_topic", "/objects_in");
     declare_parameter<std::string>("output_objects_topic", "/objects_out");
@@ -55,9 +58,6 @@ public:
       get_parameter("excluded_labels").as_integer_array().end()
     );
 
-    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
-    tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
-
     map_sub_ = create_subscription<autoware_auto_mapping_msgs::msg::HADMapBin>(
       map_topic_, rclcpp::QoS(1).transient_local().reliable(), std::bind(&ObjectExcludeOnLaneletChecker::mapCallback, this, _1));
 
@@ -69,8 +69,8 @@ public:
   }
 
 private:
-  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-  std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
   rclcpp::Subscription<autoware_auto_mapping_msgs::msg::HADMapBin>::SharedPtr map_sub_;
   rclcpp::Subscription<autoware_perception_msgs::msg::DetectedObjects>::SharedPtr object_sub_;
   rclcpp::Publisher<autoware_perception_msgs::msg::DetectedObjects>::SharedPtr object_pub_;
@@ -106,7 +106,7 @@ private:
       input_pose.pose = obj.kinematics.pose_with_covariance.pose;
 
       try {
-        map_pose = tf_buffer_->transform(input_pose, "map", tf2::durationFromSec(0.2));
+        map_pose = tf_buffer_.transform(input_pose, "map", tf2::durationFromSec(0.2));
       } catch (const tf2::TransformException & ex) {
         RCLCPP_WARN(get_logger(), "Transform failed: %s", ex.what());
         continue;
