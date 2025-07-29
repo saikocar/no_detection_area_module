@@ -31,8 +31,21 @@ using std::placeholders::_1;
 using lanelet::LaneletMapPtr;
 
 class ObjectExcludeOnLaneletChecker : public rclcpp::Node, public std::enable_shared_from_this<ObjectExcludeOnLaneletChecker> {
+private:
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
+  rclcpp::Subscription<autoware_auto_mapping_msgs::msg::HADMapBin>::SharedPtr map_sub_;
+  rclcpp::Subscription<autoware_perception_msgs::msg::DetectedObjects>::SharedPtr object_sub_;
+  rclcpp::Publisher<autoware_perception_msgs::msg::DetectedObjects>::SharedPtr object_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
+  //std::unordered_set<int64_t> excluded_labels_;
+  std::vector<int64_t> excluded_labels_;
+  lanelet::LaneletMapPtr lanelet_map_;
+  std::string map_topic_, input_objects_topic_, output_objects_topic_, marker_topic_;
+  std::string marker_on_ns_, marker_off_ns_, target_subtype_;
+ 
 public:
-  ObjectExcludeOnLaneletChecker() : Node("object_exclude_on_lanelet_checker")
+  ObjectExcludeOnLaneletChecker(const rclcpp::NodeOptions &options) : Node("object_exclude_on_lanelet_checker", options)
     , tf_buffer_(this->get_clock())
     , tf_listener_(tf_buffer_)
   {
@@ -53,37 +66,32 @@ public:
     marker_off_ns_ = get_parameter("marker_off_ns").as_string();
     target_subtype_ = get_parameter("target_subtype").as_string();
 
-    excluded_labels_ = std::unordered_set<int64_t>(
+    /*excluded_labels_ = std::unordered_set<int64_t>(
       get_parameter("excluded_labels").as_integer_array().begin(),
       get_parameter("excluded_labels").as_integer_array().end()
-    );
+    );*/
+    excluded_labels_ = get_parameter("excluded_labels").as_integer_array();
 
     map_sub_ = create_subscription<autoware_auto_mapping_msgs::msg::HADMapBin>(
-      map_topic_, rclcpp::QoS(1).transient_local().reliable(), std::bind(&ObjectExcludeOnLaneletChecker::mapCallback, this, _1));
+     map_topic_, rclcpp::QoS(1).transient_local().reliable(), std::bind(&ObjectExcludeOnLaneletChecker::mapCallback, this, _1));
 
     object_sub_ = create_subscription<autoware_perception_msgs::msg::DetectedObjects>(
-      input_objects_topic_, rclcpp::QoS(10), std::bind(&ObjectExcludeOnLaneletChecker::objectCallback, this, _1));
+     input_objects_topic_, rclcpp::QoS(10), std::bind(&ObjectExcludeOnLaneletChecker::objectCallback, this, _1));
 
     object_pub_ = create_publisher<autoware_perception_msgs::msg::DetectedObjects>(output_objects_topic_, 10);
     marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(marker_topic_, 10);
   }
 
 private:
-  tf2_ros::Buffer tf_buffer_;
-  tf2_ros::TransformListener tf_listener_;
-  rclcpp::Subscription<autoware_auto_mapping_msgs::msg::HADMapBin>::SharedPtr map_sub_;
-  rclcpp::Subscription<autoware_perception_msgs::msg::DetectedObjects>::SharedPtr object_sub_;
-  rclcpp::Publisher<autoware_perception_msgs::msg::DetectedObjects>::SharedPtr object_pub_;
-  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
-  std::unordered_set<int64_t> excluded_labels_;
-  lanelet::LaneletMapPtr lanelet_map_;
-  std::string map_topic_, input_objects_topic_, output_objects_topic_, marker_topic_;
-  std::string marker_on_ns_, marker_off_ns_, target_subtype_;
-
   void mapCallback(const autoware_auto_mapping_msgs::msg::HADMapBin & msg) {
+    try{
     lanelet_map_ = std::make_shared<lanelet::LaneletMap>();
     lanelet::utils::conversion::fromBinMsg(msg, lanelet_map_);
-    RCLCPP_INFO(get_logger(), "Lanelet map loaded with %lu lanelets", lanelet_map_->laneletLayer.size());
+    RCLCPP_INFO(get_logger(), "Lanelet map loaded with %lu lanelets", lanelet_map_->laneletLayer.size());}
+    catch(const std::exception & e){
+    RCLCPP_INFO(get_logger(), "map load failed");
+    lanelet_map_=nullptr;
+    }
   }
 
   bool isInsideTargetLanelet(const lanelet::ConstLanelet & lanelet, const lanelet::BasicPoint2d & pt) const {
@@ -169,7 +177,10 @@ private:
       try{
       if (!obj.classification.empty()) {
         const auto label = static_cast<int64_t>(obj.classification.front().label);
-        label_excluded = excluded_labels_.count(label) > 0;
+        //label_excluded = excluded_labels_.count(label) > 0;
+        for(int label_len=0;label_len<excluded_labels_.size();label_len++){
+          if(excluded_labels_[label_len]==label){label_excluded=true;break;}
+        }
       }
 
       if (!inside_subtype || !label_excluded) {
@@ -213,7 +224,9 @@ private:
 
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<ObjectExcludeOnLaneletChecker>());
+  rclcpp::NodeOptions options;
+  auto node = std::make_shared<ObjectExcludeOnLaneletChecker>(options);
+  rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;
 }
