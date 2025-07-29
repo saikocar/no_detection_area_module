@@ -1,8 +1,8 @@
-object_exclude_on_lanelet_filter:
+/**:
   ros__parameters:
     map_topic: "/map/vector_map"
-    input_objects_topic: "/camera/rois_depth"
-    output_objects_topic: "/objects_of_interest"
+    input_objects_topic: "/objects_in"
+    output_objects_topic: "/objects_out"
     marker_topic: "/objects_exclude_on_route_marker"
     marker_on_ns: "objects_on_route"
     marker_off_ns: "objects_off_route"

@@ -9,7 +9,7 @@
 
 #include <autoware_auto_mapping_msgs/msg/had_map_bin.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
-#include <autoware_auto_perception_msgs/msg/detected_objects.hpp>
+#include <autoware_perception_msgs/msg/detected_objects.hpp>
 
 #include <unordered_set>
 
@@ -61,10 +61,10 @@ public:
     map_sub_ = create_subscription<autoware_auto_mapping_msgs::msg::HADMapBin>(
       map_topic_, rclcpp::QoS(1).transient_local().reliable(), std::bind(&ObjectExcludeOnLaneletChecker::mapCallback, this, _1));
 
-    object_sub_ = create_subscription<autoware_auto_perception_msgs::msg::DetectedObjects>(
+    object_sub_ = create_subscription<autoware_perception_msgs::msg::DetectedObjects>(
       input_objects_topic_, rclcpp::QoS(10), std::bind(&ObjectExcludeOnLaneletChecker::objectCallback, this, _1));
 
-    object_pub_ = create_publisher<autoware_auto_perception_msgs::msg::DetectedObjects>(output_objects_topic_, 10);
+    object_pub_ = create_publisher<autoware_perception_msgs::msg::DetectedObjects>(output_objects_topic_, 10);
     marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(marker_topic_, 10);
   }
 
@@ -72,8 +72,8 @@ private:
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp::Subscription<autoware_auto_mapping_msgs::msg::HADMapBin>::SharedPtr map_sub_;
-  rclcpp::Subscription<autoware_auto_perception_msgs::msg::DetectedObjects>::SharedPtr object_sub_;
-  rclcpp::Publisher<autoware_auto_perception_msgs::msg::DetectedObjects>::SharedPtr object_pub_;
+  rclcpp::Subscription<autoware_perception_msgs::msg::DetectedObjects>::SharedPtr object_sub_;
+  rclcpp::Publisher<autoware_perception_msgs::msg::DetectedObjects>::SharedPtr object_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
   std::unordered_set<int64_t> excluded_labels_;
   lanelet::LaneletMapPtr lanelet_map_;
@@ -92,10 +92,10 @@ private:
     return lanelet::geometry::within(pt, lanelet.polygon2d());
   }
 
-  void objectCallback(const autoware_auto_perception_msgs::msg::DetectedObjects::ConstSharedPtr msg) {
+  void objectCallback(const autoware_perception_msgs::msg::DetectedObjects::ConstSharedPtr msg) {
     if (!lanelet_map_) return;
 
-    autoware_auto_perception_msgs::msg::DetectedObjects objects_filtered;
+    autoware_perception_msgs::msg::DetectedObjects objects_filtered;
     objects_filtered.header = msg->header;
     visualization_msgs::msg::MarkerArray markers;
     int marker_id = 0;
@@ -113,7 +113,7 @@ private:
       }
 
       bool inside_subtype = false;
-      if (obj.shape.type == autoware_auto_perception_msgs::msg::Shape::BOUNDING_BOX) {
+      if (obj.shape.type == autoware_perception_msgs::msg::Shape::BOUNDING_BOX) {
         // --- BOX の8隅を使った判定 ---
         const auto& dims = obj.shape.dimensions;
         const double x = dims.x / 2.0;
@@ -134,21 +134,24 @@ private:
         Eigen::Vector3d trans(map_pose.pose.position.x,
                               map_pose.pose.position.y,
                               map_pose.pose.position.z);
-
         for (const auto& corner_local : corners_local) {
+          try{
           Eigen::Vector3d corner_world = q * corner_local + trans;
           lanelet::BasicPoint2d pt(corner_world.x(), corner_world.y());
-
           for (const auto& lanelet : lanelet_map_->laneletLayer) {
             if (isInsideTargetLanelet(lanelet, pt)) {
               inside_subtype = true;
               break;
             }
+          }}catch(const std::exception & e){
+            RCLCPP_WARN(get_logger(), "layer failed");
+            continue;
           }
           if (inside_subtype) break; // 一つでも入っていればよい
         }
       } else {
         // --- 重心のみで判定 ---
+        try{
         lanelet::BasicPoint2d pt(map_pose.pose.position.x, map_pose.pose.position.y);
         for (const auto& lanelet : lanelet_map_->laneletLayer) {
           if (isInsideTargetLanelet(lanelet, pt)) {
@@ -156,9 +159,14 @@ private:
             break;
           }
         }
+      }catch(const std::exception & e){
+            RCLCPP_WARN(get_logger(), "gravity failed");
+            continue;        
+      }
       }
       // ラベル除外判定
       bool label_excluded = false;
+      try{
       if (!obj.classification.empty()) {
         const auto label = static_cast<int64_t>(obj.classification.front().label);
         label_excluded = excluded_labels_.count(label) > 0;
@@ -167,6 +175,11 @@ private:
       if (!inside_subtype || !label_excluded) {
         objects_filtered.objects.push_back(obj);
       }
+    }catch(const std::exception & e){
+            RCLCPP_WARN(get_logger(), "label exclude failed");
+            continue;        
+    }
+    try{
 
       visualization_msgs::msg::Marker marker;
       marker.header = msg->header;
@@ -187,6 +200,10 @@ private:
         marker.color.b = 0.0;
       }
       markers.markers.push_back(marker);
+    }catch(const std::exception & e){
+            RCLCPP_WARN(get_logger(), "make marker failed");
+            continue;        
+    }
     }
 
     object_pub_->publish(objects_filtered);
