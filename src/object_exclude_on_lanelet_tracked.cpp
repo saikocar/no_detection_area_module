@@ -40,7 +40,7 @@ private:
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
   //std::unordered_set<int64_t> excluded_labels_;
   std::vector<int64_t> excluded_labels_;
-  lanelet::LaneletMapPtr lanelet_map_;
+  std::vector<lanelet::ConstLanelet> lanelet_map_;
   std::string map_topic_, input_objects_topic_, output_objects_topic_, marker_topic_;
   std::string marker_on_ns_, marker_off_ns_, target_subtype_;
  
@@ -84,24 +84,39 @@ public:
 
 private:
   void mapCallback(const autoware_auto_mapping_msgs::msg::HADMapBin & msg) {
-    try{
-    lanelet_map_ = std::make_shared<lanelet::LaneletMap>();
-    lanelet::utils::conversion::fromBinMsg(msg, lanelet_map_);
-    RCLCPP_INFO(get_logger(), "Lanelet map loaded with %lu lanelets", lanelet_map_->laneletLayer.size());}
-    catch(const std::exception & e){
-    RCLCPP_INFO(get_logger(), "map load failed");
-    lanelet_map_=nullptr;
+    try {
+      auto full_map = std::make_shared<lanelet::LaneletMap>();
+      lanelet::utils::conversion::fromBinMsg(msg, full_map);
+
+      RCLCPP_INFO(get_logger(), "Full lanelet map loaded with %lu lanelets", full_map->laneletLayer.size());
+
+      // target subtype の lanelet のみを保持
+      lanelet_map_.clear();
+      for (const auto & lanelet : full_map->laneletLayer) {
+        if (!lanelet.hasAttribute("subtype")) continue;
+        if (lanelet.attribute("subtype") != target_subtype_) continue;
+        lanelet_map_.push_back(lanelet);
+      }
+
+      RCLCPP_INFO(get_logger(), "Filtered lanelets with subtype='%s': %lu",
+                  target_subtype_.c_str(), lanelet_map_.size());
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(get_logger(), "Map load failed: %s", e.what());
+      lanelet_map_.clear();
     }
   }
-
-  bool isInsideTargetLanelet(const lanelet::ConstLanelet & lanelet, const lanelet::BasicPoint2d & pt) const {
-    if (!lanelet.hasAttribute("subtype")) return false;
-    if (lanelet.attribute("subtype") != target_subtype_) return false;
-    return lanelet::geometry::within(pt, lanelet.polygon2d());
+  bool isInsideTargetLanelet(const lanelet::BasicPoint2d & pt) const {
+    for (const auto & lanelet : lanelet_map_) {
+      if (lanelet::geometry::within(pt, lanelet.polygon2d())) {
+        return true;
+      }
+    }
+    return false;
   }
 
+
   void objectCallback(const autoware_auto_perception_msgs::msg::TrackedObjects::ConstSharedPtr msg) {
-    if (!lanelet_map_) return;
+    if (lanelet_map_.empty()) return;
 
     autoware_auto_perception_msgs::msg::TrackedObjects objects_filtered;
     objects_filtered.header = msg->header;
@@ -146,8 +161,8 @@ private:
           try{
           Eigen::Vector3d corner_world = q * corner_local + trans;
           lanelet::BasicPoint2d pt(corner_world.x(), corner_world.y());
-          for (const auto& lanelet : lanelet_map_->laneletLayer) {
-            if (isInsideTargetLanelet(lanelet, pt)) {
+          for (const auto & lanelet : lanelet_map_) {
+            if (isInsideTargetLanelet(pt)) {
               inside_subtype = true;
               break;
             }
@@ -161,8 +176,8 @@ private:
         // --- 重心のみで判定 ---
         try{
         lanelet::BasicPoint2d pt(map_pose.pose.position.x, map_pose.pose.position.y);
-        for (const auto& lanelet : lanelet_map_->laneletLayer) {
-          if (isInsideTargetLanelet(lanelet, pt)) {
+        for (const auto & lanelet : lanelet_map_) {
+            if (isInsideTargetLanelet(pt)) {
             inside_subtype = true;
             break;
           }
