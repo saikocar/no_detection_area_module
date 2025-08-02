@@ -137,7 +137,11 @@ private:
 
   void objectCallback(const autoware_perception_msgs::msg::DetectedObjects::ConstSharedPtr msg) {
     //if (!lanelet_map_) return;
-    if (lanelet_map_.empty()) return;
+    if (lanelet_map_.empty()){
+      object_pub_->publish(*msg);
+      RCLCPP_INFO(get_logger(), "No no-detection-area or map-data is not arrived, so marker for rviz is not making");
+      return;
+    }
 
     autoware_perception_msgs::msg::DetectedObjects objects_filtered;
     objects_filtered.header = msg->header;
