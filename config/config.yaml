@@ -3,9 +3,6 @@
     map_topic: "/map/vector_map"
     input_objects_topic: "/objects_in"
     output_objects_topic: "/objects_out"
-    marker_topic: "/objects_exclude_on_route_marker"
-    marker_on_ns: "objects_on_route"
-    marker_off_ns: "objects_off_route"
     target_subtype: "no_detection_area"
     excluded_labels: [0, 1, 2, 3, 4]
       

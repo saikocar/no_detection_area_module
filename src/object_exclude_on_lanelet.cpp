@@ -8,7 +8,6 @@
 #include <lanelet2_core/geometry/Point.h>
 
 #include <autoware_auto_mapping_msgs/msg/had_map_bin.hpp>
-#include <visualization_msgs/msg/marker_array.hpp>
 #include <autoware_perception_msgs/msg/detected_objects.hpp>
 
 #include <unordered_set>
@@ -37,13 +36,11 @@ private:
   rclcpp::Subscription<autoware_auto_mapping_msgs::msg::HADMapBin>::SharedPtr map_sub_;
   rclcpp::Subscription<autoware_perception_msgs::msg::DetectedObjects>::SharedPtr object_sub_;
   rclcpp::Publisher<autoware_perception_msgs::msg::DetectedObjects>::SharedPtr object_pub_;
-  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
-  //std::unordered_set<int64_t> excluded_labels_;
   std::vector<int64_t> excluded_labels_;
-  //lanelet::LaneletMapPtr lanelet_map_;
   std::vector<lanelet::ConstLanelet> lanelet_map_;
-  std::string map_topic_, input_objects_topic_, output_objects_topic_, marker_topic_;
-  std::string marker_on_ns_, marker_off_ns_, target_subtype_;
+  std::vector<lanelet::ConstLanelet> lanelet_map_near_;
+  std::string map_topic_, input_objects_topic_, output_objects_topic_;
+  std::string target_subtype_;
  
 public:
   ObjectExcludeOnLaneletChecker(const rclcpp::NodeOptions &options) : Node("object_exclude_on_lanelet_checker", options)
@@ -53,24 +50,14 @@ public:
     declare_parameter<std::string>("map_topic", "/map/vector_map");
     declare_parameter<std::string>("input_objects_topic", "/objects_in");
     declare_parameter<std::string>("output_objects_topic", "/objects_out");
-    declare_parameter<std::string>("marker_topic", "/objects_filtered_marker");
-    declare_parameter<std::string>("marker_on_ns", "objects_kept");
-    declare_parameter<std::string>("marker_off_ns", "objects_filtered");
     declare_parameter<std::string>("target_subtype", "no_detection_area");
     declare_parameter<std::vector<int64_t>>("excluded_labels", std::vector<int64_t>{});
 
     map_topic_ = get_parameter("map_topic").as_string();
     input_objects_topic_ = get_parameter("input_objects_topic").as_string();
     output_objects_topic_ = get_parameter("output_objects_topic").as_string();
-    marker_topic_ = get_parameter("marker_topic").as_string();
-    marker_on_ns_ = get_parameter("marker_on_ns").as_string();
-    marker_off_ns_ = get_parameter("marker_off_ns").as_string();
     target_subtype_ = get_parameter("target_subtype").as_string();
 
-    /*excluded_labels_ = std::unordered_set<int64_t>(
-      get_parameter("excluded_labels").as_integer_array().begin(),
-      get_parameter("excluded_labels").as_integer_array().end()
-    );*/
     excluded_labels_ = get_parameter("excluded_labels").as_integer_array();
 
     map_sub_ = create_subscription<autoware_auto_mapping_msgs::msg::HADMapBin>(
@@ -80,22 +67,9 @@ public:
      input_objects_topic_, rclcpp::QoS(10), std::bind(&ObjectExcludeOnLaneletChecker::objectCallback, this, _1));
 
     object_pub_ = create_publisher<autoware_perception_msgs::msg::DetectedObjects>(output_objects_topic_, 10);
-    marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(marker_topic_, 10);
   }
 
 private:
-  /*
-  void mapCallback(const autoware_auto_mapping_msgs::msg::HADMapBin & msg) {
-    try{
-    lanelet_map_ = std::make_shared<lanelet::LaneletMap>();
-    lanelet::utils::conversion::fromBinMsg(msg, lanelet_map_);
-    RCLCPP_INFO(get_logger(), "Lanelet map loaded with %lu lanelets", lanelet_map_->laneletLayer.size());}
-    catch(const std::exception & e){
-    RCLCPP_INFO(get_logger(), "map load failed");
-    lanelet_map_=nullptr;
-    }
-  }
-  */
 
   void mapCallback(const autoware_auto_mapping_msgs::msg::HADMapBin & msg) {
     try {
@@ -119,16 +93,9 @@ private:
       lanelet_map_.clear();
     }
   }
-  /*
-  bool isInsideTargetLanelet(const lanelet::ConstLanelet & lanelet, const lanelet::BasicPoint2d & pt) const {
-    if (!lanelet.hasAttribute("subtype")) return false;
-    if (lanelet.attribute("subtype") != target_subtype_) return false;
-    return lanelet::geometry::within(pt, lanelet.polygon2d());
-  }
-  */
   bool isInsideTargetLanelet(const lanelet::BasicPoint2d & pt) const {
-    for (const auto & lanelet : lanelet_map_) {
-      if (lanelet::geometry::within(pt, lanelet.polygon2d())) {
+    for (const auto & lanelet : lanelet_map_near_) {
+      if (!lanelet::geometry::within(pt, lanelet.polygon2d())) {
         return true;
       }
     }
@@ -139,14 +106,32 @@ private:
     //if (!lanelet_map_) return;
     if (lanelet_map_.empty()){
       object_pub_->publish(*msg);
-      RCLCPP_INFO(get_logger(), "No no-detection-area or map-data is not arrived, so marker for rviz is not making");
       return;
     }
+    lanelet::BasicPoint2d current_pos;
 
+    // --- TFから現在位置を取得 ---
+    try {
+      geometry_msgs::msg::TransformStamped transform =
+          tf_buffer_.lookupTransform("map", "base_link", tf2::TimePointZero);
+
+      current_pos = { transform.transform.translation.x,
+                      transform.transform.translation.y };
+
+    } catch (const tf2::TransformException &ex) {
+      RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", ex.what());
+      object_pub_->publish(*msg);
+      return;  // 現在位置が取れなければマップデータが存在しない場合と同様の処理をする
+    }
+    double threshold = 50.0; //50[m]以内なら近いと判定
+    lanelet_map_near_.clear();
+    for (const auto & ll : lanelet_map_) { // std::vector<ConstLanelet>
+        double dist = lanelet::geometry::distance2d(current_pos, ll.polygon2d()); // 点とレーンの距離[m]
+        //距離内ならnearに入れて以降の処理に利用する
+        if (dist < threshold) {lanelet_map_near_.push_back(ll);}         
+    }
     autoware_perception_msgs::msg::DetectedObjects objects_filtered;
     objects_filtered.header = msg->header;
-    visualization_msgs::msg::MarkerArray markers;
-    int marker_id = 0;
 
     for (const auto& obj : msg->objects) {
       geometry_msgs::msg::PoseStamped input_pose, map_pose;
@@ -160,7 +145,7 @@ private:
         continue;
       }
 
-      bool inside_subtype = false;
+      bool inside_subtype = true;
       if (obj.shape.type == autoware_perception_msgs::msg::Shape::BOUNDING_BOX) {
         // --- BOX の8隅を使った判定 ---
         const auto& dims = obj.shape.dimensions;
@@ -183,45 +168,20 @@ private:
                               map_pose.pose.position.y,
                               map_pose.pose.position.z);
         for (const auto& corner_local : corners_local) {
-          try{
-          Eigen::Vector3d corner_world = q * corner_local + trans;
-          lanelet::BasicPoint2d pt(corner_world.x(), corner_world.y());
-          //for (const auto& lanelet : lanelet_map_->laneletLayer) {
-          for (const auto & lanelet : lanelet_map_) {
-            //if (isInsideTargetLanelet(lanelet, pt)) {
-            if (isInsideTargetLanelet(pt)) {
-              inside_subtype = true;
-              break;
-            }
-          }}catch(const std::exception & e){
-            RCLCPP_WARN(get_logger(), "layer failed");
-            continue;
-          }
-          if (inside_subtype) break; // 一つでも入っていればよい
+            Eigen::Vector3d corner_world = q * corner_local + trans;
+            lanelet::BasicPoint2d pt(corner_world.x(), corner_world.y());
+            if (!isInsideTargetLanelet(pt)) {inside_subtype = false;break;}
         }
       } else {
         // --- 重心のみで判定 ---
-        try{
         lanelet::BasicPoint2d pt(map_pose.pose.position.x, map_pose.pose.position.y);
-        //for (const auto& lanelet : lanelet_map_->laneletLayer) {
-        for (const auto & lanelet : lanelet_map_) {
-          //if (isInsideTargetLanelet(lanelet, pt)) {
-          if (isInsideTargetLanelet(pt)) {
-            inside_subtype = true;
-            break;
-          }
-        }
-      }catch(const std::exception & e){
-            RCLCPP_WARN(get_logger(), "gravity failed");
-            continue;        
-      }
+        if (!isInsideTargetLanelet(pt)) {inside_subtype = false;}
       }
       // ラベル除外判定
       bool label_excluded = false;
       try{
       if (!obj.classification.empty()) {
         const auto label = static_cast<int64_t>(obj.classification.front().label);
-        //label_excluded = excluded_labels_.count(label) > 0;
         for(int label_len=0;label_len<excluded_labels_.size();label_len++){
           if(excluded_labels_[label_len]==label){label_excluded=true;break;}
         }
@@ -234,35 +194,9 @@ private:
             RCLCPP_WARN(get_logger(), "label exclude failed");
             continue;        
     }
-    try{
-
-      visualization_msgs::msg::Marker marker;
-      marker.header = msg->header;
-      marker.ns = (!inside_subtype || !label_excluded) ? marker_off_ns_ : marker_on_ns_;
-      marker.id = marker_id++;
-      marker.type = visualization_msgs::msg::Marker::SPHERE;
-      marker.action = visualization_msgs::msg::Marker::ADD;
-      marker.pose = input_pose.pose;
-      marker.scale.x = marker.scale.y = marker.scale.z = 1.0;
-      marker.color.a = 0.8;
-      if (!inside_subtype || !label_excluded) {
-        marker.color.r = 0.0;
-        marker.color.g = 0.0;
-        marker.color.b = 1.0;
-      } else {
-        marker.color.r = 1.0;
-        marker.color.g = 0.0;
-        marker.color.b = 0.0;
-      }
-      markers.markers.push_back(marker);
-    }catch(const std::exception & e){
-            RCLCPP_WARN(get_logger(), "make marker failed");
-            continue;        
-    }
     }
 
     object_pub_->publish(objects_filtered);
-    marker_pub_->publish(markers);
   }
 };
 

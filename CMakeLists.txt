@@ -11,12 +11,12 @@ find_package(rclcpp REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
-find_package(visualization_msgs REQUIRED)
 
 find_package(autoware_auto_mapping_msgs REQUIRED)
 find_package(autoware_perception_msgs REQUIRED)
 find_package(autoware_auto_perception_msgs REQUIRED)
 find_package(autoware_planning_msgs REQUIRED)
+find_package(tier4_perception_msgs REQUIRED)
 
 find_package(lanelet2_core REQUIRED)
 find_package(lanelet2_io REQUIRED)
@@ -28,13 +28,14 @@ find_package(Eigen3 REQUIRED)
 # 実行ファイル
 add_executable(object_exclude_on_lanelet_filter src/object_exclude_on_lanelet.cpp)
 add_executable(object_exclude_on_lanelet_filter_tracked src/object_exclude_on_lanelet_tracked.cpp)
+add_executable(object_exclude_on_lanelet_filter_withfeature src/object_exclude_on_lanelet_withfeature.cpp)
+
 
 ament_target_dependencies(object_exclude_on_lanelet_filter
   rclcpp
   tf2_ros
   tf2_geometry_msgs
   geometry_msgs
-  visualization_msgs
   autoware_auto_mapping_msgs
   autoware_perception_msgs
   autoware_planning_msgs
@@ -49,9 +50,21 @@ ament_target_dependencies(object_exclude_on_lanelet_filter_tracked
   tf2_ros
   tf2_geometry_msgs
   geometry_msgs
-  visualization_msgs
   autoware_auto_mapping_msgs
   autoware_auto_perception_msgs
+  autoware_planning_msgs
+  lanelet2_core
+  lanelet2_io
+  lanelet2_projection
+  lanelet2_extension
+)
+ament_target_dependencies(object_exclude_on_lanelet_filter_withfeature
+  rclcpp
+  tf2_ros
+  tf2_geometry_msgs
+  geometry_msgs
+  autoware_auto_mapping_msgs
+  tier4_perception_msgs
   autoware_planning_msgs
   lanelet2_core
   lanelet2_io
@@ -63,6 +76,7 @@ ament_target_dependencies(object_exclude_on_lanelet_filter_tracked
 install(TARGETS
   object_exclude_on_lanelet_filter
   object_exclude_on_lanelet_filter_tracked
+  object_exclude_on_lanelet_filter_withfeature
   DESTINATION lib/${PROJECT_NAME}
 )
 

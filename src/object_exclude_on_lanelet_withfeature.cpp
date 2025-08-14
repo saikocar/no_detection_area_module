@@ -8,7 +8,7 @@
 #include <lanelet2_core/geometry/Point.h>
 
 #include <autoware_auto_mapping_msgs/msg/had_map_bin.hpp>
-#include <autoware_auto_perception_msgs/msg/tracked_objects.hpp>
+#include <tier4_perception_msgs/msg/detected_objects_with_feature.hpp>
 
 #include <unordered_set>
 
@@ -34,8 +34,8 @@ private:
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
   rclcpp::Subscription<autoware_auto_mapping_msgs::msg::HADMapBin>::SharedPtr map_sub_;
-  rclcpp::Subscription<autoware_auto_perception_msgs::msg::TrackedObjects>::SharedPtr object_sub_;
-  rclcpp::Publisher<autoware_auto_perception_msgs::msg::TrackedObjects>::SharedPtr object_pub_;
+  rclcpp::Subscription<tier4_perception_msgs::msg::DetectedObjectsWithFeature>::SharedPtr object_sub_;
+  rclcpp::Publisher<tier4_perception_msgs::msg::DetectedObjectsWithFeature>::SharedPtr object_pub_;
   std::vector<int64_t> excluded_labels_;
   std::vector<lanelet::ConstLanelet> lanelet_map_;
   std::vector<lanelet::ConstLanelet> lanelet_map_near_;
@@ -63,10 +63,10 @@ public:
     map_sub_ = create_subscription<autoware_auto_mapping_msgs::msg::HADMapBin>(
      map_topic_, rclcpp::QoS(1).transient_local().reliable(), std::bind(&ObjectExcludeOnLaneletChecker::mapCallback, this, _1));
 
-    object_sub_ = create_subscription<autoware_auto_perception_msgs::msg::TrackedObjects>(
+    object_sub_ = create_subscription<tier4_perception_msgs::msg::DetectedObjectsWithFeature>(
      input_objects_topic_, rclcpp::QoS(10), std::bind(&ObjectExcludeOnLaneletChecker::objectCallback, this, _1));
 
-    object_pub_ = create_publisher<autoware_auto_perception_msgs::msg::TrackedObjects>(output_objects_topic_, 10);
+    object_pub_ = create_publisher<tier4_perception_msgs::msg::DetectedObjectsWithFeature>(output_objects_topic_, 10);
   }
 
 private:
@@ -93,7 +93,7 @@ private:
     }
   }
   bool isInsideTargetLanelet(const lanelet::BasicPoint2d & pt) const {
-    for (const auto & lanelet : lanelet_map_) {
+    for (const auto & lanelet : lanelet_map_near_) {
       if (lanelet::geometry::within(pt, lanelet.polygon2d())) {
         return true;
       }
@@ -102,13 +102,15 @@ private:
   }
 
 
-  void objectCallback(const autoware_auto_perception_msgs::msg::TrackedObjects::ConstSharedPtr msg) {
+  void objectCallback(const tier4_perception_msgs::msg::DetectedObjectsWithFeature::ConstSharedPtr msg) {
     if (lanelet_map_.empty()){
       object_pub_->publish(*msg);
       RCLCPP_INFO(get_logger(), "No no-detection-area or map-data is not arrived");
       return;
     }
+
     lanelet::BasicPoint2d current_pos;
+
     // --- TFから現在位置を取得 ---
     try {
       geometry_msgs::msg::TransformStamped transform =
@@ -130,10 +132,11 @@ private:
         if (dist < threshold) {lanelet_map_near_.push_back(ll);}         
     }
 
-    autoware_auto_perception_msgs::msg::TrackedObjects objects_filtered;
+    tier4_perception_msgs::msg::DetectedObjectsWithFeature objects_filtered;
     objects_filtered.header = msg->header;
 
-    for (const auto& obj : msg->objects) {
+    for (const auto& obj_feature : msg->feature_objects) {
+      const auto obj = obj_feature.object;
       geometry_msgs::msg::PoseStamped input_pose, map_pose;
       input_pose.header = msg->header;
       input_pose.pose = obj.kinematics.pose_with_covariance.pose;
@@ -188,7 +191,7 @@ private:
       }
 
       if (!inside_subtype || !label_excluded) {
-        objects_filtered.objects.push_back(obj);
+        objects_filtered.feature_objects.push_back(obj_feature);
       }
     }catch(const std::exception & e){
             RCLCPP_WARN(get_logger(), "label exclude failed");
