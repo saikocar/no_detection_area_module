@@ -12,9 +12,8 @@
 
 #include <unordered_set>
 
-#include <tf2_ros/transform_listener.h>
-#include <tf2_ros/buffer.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 
 #include <lanelet2_extension/utility/message_conversion.hpp>
 
@@ -31,26 +30,26 @@ using lanelet::LaneletMapPtr;
 
 class ObjectExcludeOnLaneletChecker : public rclcpp::Node, public std::enable_shared_from_this<ObjectExcludeOnLaneletChecker> {
 private:
-  tf2_ros::Buffer tf_buffer_;
-  tf2_ros::TransformListener tf_listener_;
   rclcpp::Subscription<autoware_auto_mapping_msgs::msg::HADMapBin>::SharedPtr map_sub_;
   rclcpp::Subscription<autoware_auto_perception_msgs::msg::TrackedObjects>::SharedPtr object_sub_;
   rclcpp::Publisher<autoware_auto_perception_msgs::msg::TrackedObjects>::SharedPtr object_pub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr pose_sub_;
   std::vector<int64_t> excluded_labels_;
   std::vector<lanelet::ConstLanelet> lanelet_map_;
   std::vector<lanelet::ConstLanelet> lanelet_map_near_;
-  std::string map_topic_, input_objects_topic_, output_objects_topic_;
+  std::string map_topic_, input_objects_topic_, output_objects_topic_,pose_topic_;
   std::string target_subtype_;
- 
+  nav_msgs::msg::Odometry current_pos_;
+  lanelet::BasicPoint2d current_pos;
+  bool current_pos_initialized = false;
 public:
   ObjectExcludeOnLaneletChecker(const rclcpp::NodeOptions &options) : Node("object_exclude_on_lanelet_checker", options)
-    , tf_buffer_(this->get_clock())
-    , tf_listener_(tf_buffer_)
   {
     declare_parameter<std::string>("map_topic", "/map/vector_map");
     declare_parameter<std::string>("input_objects_topic", "/objects_in");
     declare_parameter<std::string>("output_objects_topic", "/objects_out");
     declare_parameter<std::string>("target_subtype", "no_detection_area");
+    declare_parameter<std::string>("pose_topic", "/localization/kinamaticstate");
     declare_parameter<std::vector<int64_t>>("excluded_labels", std::vector<int64_t>{});
 
     map_topic_ = get_parameter("map_topic").as_string();
@@ -67,11 +66,30 @@ public:
      input_objects_topic_, rclcpp::QoS(10), std::bind(&ObjectExcludeOnLaneletChecker::objectCallback, this, _1));
 
     object_pub_ = create_publisher<autoware_auto_perception_msgs::msg::TrackedObjects>(output_objects_topic_, 10);
+    pose_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+      pose_topic_, rclcpp::QoS(10),std::bind(&ObjectExcludeOnLaneletChecker::poseCallback, this, _1));
   }
 
 private:
+  void poseCallback(const nav_msgs::msg::Odometry::ConstSharedPtr msg){
+      if(msg->header.frame_id != "map")
+      {
+        RCLCPP_INFO(get_logger(), "pose frame is %s, but this module expects msg frame", msg->header.frame_id.c_str());
+        lanelet_map_.clear();
+        current_pos_initialized = false;
+        return;
+      }
+    current_pos_ = *msg;
+    current_pos_initialized = true;
+  }
   void mapCallback(const autoware_auto_mapping_msgs::msg::HADMapBin & msg) {
     try {
+      if(msg.header.frame_id != "map")
+      {
+        RCLCPP_INFO(get_logger(), "lanelet map frame is %s, but this module expects msg frame", msg.header.frame_id.c_str());
+        lanelet_map_.clear();
+        return;
+      }
       auto full_map = std::make_shared<lanelet::LaneletMap>();
       lanelet::utils::conversion::fromBinMsg(msg, full_map);
 
@@ -93,35 +111,22 @@ private:
     }
   }
   bool isInsideTargetLanelet(const lanelet::BasicPoint2d & pt) const {
-    for (const auto & lanelet : lanelet_map_) {
-      if (lanelet::geometry::within(pt, lanelet.polygon2d())) {
-        return true;
-      }
+    for (const auto & lanelet : lanelet_map_near_) {
+      if (!lanelet::geometry::within(pt, lanelet.polygon2d())) {return false;}
     }
-    return false;
+    return true;
   }
 
 
   void objectCallback(const autoware_auto_perception_msgs::msg::TrackedObjects::ConstSharedPtr msg) {
-    if (lanelet_map_.empty()){
+    if (lanelet_map_.empty() || !current_pos_initialized){
       object_pub_->publish(*msg);
       RCLCPP_INFO(get_logger(), "No no-detection-area or map-data is not arrived");
       return;
     }
-    lanelet::BasicPoint2d current_pos;
-    // --- TFから現在位置を取得 ---
-    try {
-      geometry_msgs::msg::TransformStamped transform =
-          tf_buffer_.lookupTransform("map", "base_link", tf2::TimePointZero);
+    current_pos = { current_pos_.pose.pose.position.x,
+                    current_pos_.pose.pose.position.y };
 
-      current_pos = { transform.transform.translation.x,
-                      transform.transform.translation.y };
-
-    } catch (const tf2::TransformException &ex) {
-      RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", ex.what());
-      object_pub_->publish(*msg);
-      return;  // 現在位置が取れなければマップデータが存在しない場合と同様の処理をする
-    }
     double threshold = 50.0; //50[m]以内なら近いと判定
     lanelet_map_near_.clear();
     for (const auto & ll : lanelet_map_) { // std::vector<ConstLanelet>
@@ -137,12 +142,10 @@ private:
       geometry_msgs::msg::PoseStamped input_pose, map_pose;
       input_pose.header = msg->header;
       input_pose.pose = obj.kinematics.pose_with_covariance.pose;
-
-      try {
-        map_pose = tf_buffer_.transform(input_pose, "map", tf2::durationFromSec(0.2));
-      } catch (const tf2::TransformException & ex) {
-        RCLCPP_WARN(get_logger(), "Transform failed: %s", ex.what());
-        continue;
+      if(input_pose.header.frame_id != "map"){
+        RCLCPP_INFO(get_logger(), "object frame is %s, but this module expects msg frame,so the object cannot be excluded", input_pose.header.frame_id.c_str());
+         objects_filtered.objects.push_back(obj);
+         continue;
       }
 
       bool inside_subtype = true;
@@ -160,13 +163,13 @@ private:
         };
 
         // poseの回転と位置を行列に変換
-        Eigen::Quaterniond q(map_pose.pose.orientation.w,
-                            map_pose.pose.orientation.x,
-                            map_pose.pose.orientation.y,
-                            map_pose.pose.orientation.z);
-        Eigen::Vector3d trans(map_pose.pose.position.x,
-                              map_pose.pose.position.y,
-                              map_pose.pose.position.z);
+        Eigen::Quaterniond q(input_pose.pose.orientation.w,
+                            input_pose.pose.orientation.x,
+                            input_pose.pose.orientation.y,
+                            input_pose.pose.orientation.z);
+        Eigen::Vector3d trans(input_pose.pose.position.x,
+                              input_pose.pose.position.y,
+                              input_pose.pose.position.z);
         for (const auto& corner_local : corners_local) {
             Eigen::Vector3d corner_world = q * corner_local + trans;
             lanelet::BasicPoint2d pt(corner_world.x(), corner_world.y());
@@ -174,7 +177,7 @@ private:
         }
       } else {
         // --- 重心のみで判定 ---
-        lanelet::BasicPoint2d pt(map_pose.pose.position.x, map_pose.pose.position.y);
+        lanelet::BasicPoint2d pt(input_pose.pose.position.x, input_pose.pose.position.y);
         if (!isInsideTargetLanelet(pt)) {inside_subtype = false;}
       }
       // ラベル除外判定

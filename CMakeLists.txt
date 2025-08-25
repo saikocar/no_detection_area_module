@@ -8,9 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # find_package
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(tf2_ros REQUIRED)
-find_package(tf2_geometry_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 
 find_package(autoware_auto_mapping_msgs REQUIRED)
 find_package(autoware_perception_msgs REQUIRED)
@@ -30,12 +29,10 @@ add_executable(object_exclude_on_lanelet_filter src/object_exclude_on_lanelet.cp
 add_executable(object_exclude_on_lanelet_filter_tracked src/object_exclude_on_lanelet_tracked.cpp)
 add_executable(object_exclude_on_lanelet_filter_withfeature src/object_exclude_on_lanelet_withfeature.cpp)
 
-
 ament_target_dependencies(object_exclude_on_lanelet_filter
   rclcpp
-  tf2_ros
-  tf2_geometry_msgs
   geometry_msgs
+  nav_msgs
   autoware_auto_mapping_msgs
   autoware_perception_msgs
   autoware_planning_msgs
@@ -47,9 +44,8 @@ ament_target_dependencies(object_exclude_on_lanelet_filter
 
 ament_target_dependencies(object_exclude_on_lanelet_filter_tracked
   rclcpp
-  tf2_ros
-  tf2_geometry_msgs
   geometry_msgs
+  nav_msgs
   autoware_auto_mapping_msgs
   autoware_auto_perception_msgs
   autoware_planning_msgs
@@ -60,9 +56,8 @@ ament_target_dependencies(object_exclude_on_lanelet_filter_tracked
 )
 ament_target_dependencies(object_exclude_on_lanelet_filter_withfeature
   rclcpp
-  tf2_ros
-  tf2_geometry_msgs
   geometry_msgs
+  nav_msgs
   autoware_auto_mapping_msgs
   tier4_perception_msgs
   autoware_planning_msgs
