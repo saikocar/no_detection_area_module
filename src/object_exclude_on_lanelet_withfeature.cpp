@@ -49,7 +49,7 @@ public:
     declare_parameter<std::string>("input_objects_topic", "/objects_in");
     declare_parameter<std::string>("output_objects_topic", "/objects_out");
     declare_parameter<std::string>("target_subtype", "no_detection_area");
-    declare_parameter<std::string>("pose_topic", "/localization/kinamaticstate");
+    declare_parameter<std::string>("pose_topic", "/localization/kinamatic_state");
     declare_parameter<std::vector<int64_t>>("excluded_labels", std::vector<int64_t>{});
 
     map_topic_ = get_parameter("map_topic").as_string();
