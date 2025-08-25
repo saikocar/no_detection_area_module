@@ -56,7 +56,7 @@ public:
     input_objects_topic_ = get_parameter("input_objects_topic").as_string();
     output_objects_topic_ = get_parameter("output_objects_topic").as_string();
     target_subtype_ = get_parameter("target_subtype").as_string();
-
+    pose_topic_ = get_parameter("pose_topic").as_string();
     excluded_labels_ = get_parameter("excluded_labels").as_integer_array();
 
     map_sub_ = create_subscription<autoware_auto_mapping_msgs::msg::HADMapBin>(
