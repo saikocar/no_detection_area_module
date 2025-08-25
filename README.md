@@ -61,13 +61,13 @@ ros2 launch no_detection_area_module object_exclude_on_lanelet_filter_withfeatur
 
 ### サブスクライブ
 
+* `pose_topic` (`nav_msgs::msg::Odometry`)
 * `map_topic` (`autoware_auto_mapping_msgs/msg/HADMapBin`)
 * `input_objects_topic` (`<起動するノード毎のハードコートされた型に依存>`)
 
 ### パブリッシュ
 
 * `output_objects_topic` (`<input_objects_topicの型と同じ>`)
-* `marker_topic` (`visualization_msgs/msg/MarkerArray`)
 
 ---
 
@@ -90,7 +90,7 @@ ros2 launch no_detection_area_module object_exclude_on_lanelet_filter_withfeatur
 
 * `lanelet2_core`, `lanelet2_io`, `lanelet2_projection`, `lanelet2_extension`
 * `autoware_auto_mapping_msgs`, `autoware_auto_perception_msgs`, `autoware_perception_msgs`, `tier4_perception_msgs`
-* `tf2_ros`, `visualization_msgs`, `Eigen`, `boost`
+* `nav_msgs`, `Eigen`, `boost`
 
 ---
 
