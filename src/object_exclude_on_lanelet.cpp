@@ -25,6 +25,10 @@
 
 #include <iterator>
 
+#include <nlohmann/json.hpp>
+
+#include <cstdint>
+
 using std::placeholders::_1;
 using lanelet::LaneletMapPtr;
 
@@ -34,11 +38,11 @@ private:
   rclcpp::Subscription<autoware_perception_msgs::msg::DetectedObjects>::SharedPtr object_sub_;
   rclcpp::Publisher<autoware_perception_msgs::msg::DetectedObjects>::SharedPtr object_pub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr pose_sub_;
-  std::vector<int64_t> excluded_labels_;
+  std::vector<std::vector<int64_t>> excluded_labels_;
   std::vector<lanelet::ConstLanelet> lanelet_map_;
   std::vector<lanelet::ConstLanelet> lanelet_map_near_;
   std::string map_topic_, input_objects_topic_, output_objects_topic_,pose_topic_;
-  std::string target_subtype_;
+  std::vector<std::string> target_subtype_;
   nav_msgs::msg::Odometry current_pos_;
   lanelet::BasicPoint2d current_pos;
   bool current_pos_initialized = false;
@@ -48,17 +52,20 @@ public:
     declare_parameter<std::string>("map_topic", "/map/vector_map");
     declare_parameter<std::string>("input_objects_topic", "/objects_in");
     declare_parameter<std::string>("output_objects_topic", "/objects_out");
-    declare_parameter<std::string>("target_subtype", "no_detection_area");
+    declare_parameter<std::vector<std::string>>("target_subtype", {"no_detection_area"});
     declare_parameter<std::string>("pose_topic", "/localization/kinematic_state");
-    declare_parameter<std::vector<int64_t>>("excluded_labels", std::vector<int64_t>{});
-
+    declare_parameter<std::string>("excluded_labels", "[]");
+    
     map_topic_ = get_parameter("map_topic").as_string();
     input_objects_topic_ = get_parameter("input_objects_topic").as_string();
     output_objects_topic_ = get_parameter("output_objects_topic").as_string();
-    target_subtype_ = get_parameter("target_subtype").as_string();
+    target_subtype_ = get_parameter("target_subtype").as_string_array();
     pose_topic_ = get_parameter("pose_topic").as_string();
-    excluded_labels_ = get_parameter("excluded_labels").as_integer_array();
-
+    try {
+      excluded_labels_ = nlohmann::json::parse(get_parameter("excluded_labels").as_string()).get<std::vector<std::vector<int64_t>>>();
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(get_logger(), "Failed to parse excluded_labels: %s", e.what());
+    }
     map_sub_ = create_subscription<autoware_auto_mapping_msgs::msg::HADMapBin>(
      map_topic_, rclcpp::QoS(1).transient_local().reliable(), std::bind(&ObjectExcludeOnLaneletChecker::mapCallback, this, _1));
 
@@ -100,20 +107,28 @@ private:
       lanelet_map_.clear();
       for (const auto & lanelet : full_map->laneletLayer) {
         if (!lanelet.hasAttribute("subtype")) continue;
-        if (lanelet.attribute("subtype") != target_subtype_) continue;
+        if (std::find(target_subtype_.begin(), target_subtype_.end(), lanelet.attribute("subtype")) == target_subtype_.end()) {continue;}
         lanelet_map_.push_back(lanelet);
       }
 
-      RCLCPP_INFO(get_logger(), "Filtered lanelets with subtype='%s': %lu",
-                  target_subtype_.c_str(), lanelet_map_.size());
+      //RCLCPP_INFO(get_logger(), "Filtered lanelets with subtype='%s': %lu",
+      //            target_subtype_.c_str(), lanelet_map_.size());
     } catch (const std::exception & e) {
       RCLCPP_WARN(get_logger(), "Map load failed: %s", e.what());
       lanelet_map_.clear();
     }
   }
-  bool isInsideTargetLanelet(const lanelet::BasicPoint2d & pt) const {
-    for (const auto & lanelet : lanelet_map_near_) {
-      if (!lanelet::geometry::within(pt, lanelet.polygon2d())) {return false;}
+  bool isExcludeTarget(const lanelet::BasicPoint2d & pt,const std::vector<autoware_perception_msgs::msg::ObjectClassification> & classifications) const {
+    if (target_subtype_.size() == 0){return false;}
+    for (const auto & cls : classifications) {
+      uint8_t label = cls.label;
+      for (const auto & lanelet : lanelet_map_near_){
+        for(int i = 0;i<target_subtype_.size();i++){
+          for (const auto & group : excluded_labels_) {
+            if (lanelet::geometry::within(pt, lanelet.polygon2d()) && (std::find(group.begin(), group.end(), label) != group.end())) {return false;}
+          }
+        }
+      }
     }
     return true;
   }
@@ -147,7 +162,7 @@ private:
          continue;
       }
 
-      bool inside_subtype = true;
+      bool isexcludetarget = true;
       if (obj.shape.type == autoware_perception_msgs::msg::Shape::BOUNDING_BOX) {
         // --- BOX の8隅を使った判定 ---
         const auto& dims = obj.shape.dimensions;
@@ -172,30 +187,15 @@ private:
         for (const auto& corner_local : corners_local) {
             Eigen::Vector3d corner_world = q * corner_local + trans;
             lanelet::BasicPoint2d pt(corner_world.x(), corner_world.y());
-            if (!isInsideTargetLanelet(pt)) {inside_subtype = false;break;}
+            if (!isExcludeTarget(pt,obj.classification)) {isexcludetarget = false;break;}
         }
       } else {
         // --- 重心のみで判定 ---
         lanelet::BasicPoint2d pt(input_pose.pose.position.x, input_pose.pose.position.y);
-        if (!isInsideTargetLanelet(pt)) {inside_subtype = false;}
-      }
-      // ラベル除外判定
-      bool label_excluded = false;
-      try{
-      if (!obj.classification.empty()) {
-        const auto label = static_cast<int64_t>(obj.classification.front().label);
-        for(int label_len=0;label_len<excluded_labels_.size();label_len++){
-          if(excluded_labels_[label_len]==label){label_excluded=true;break;}
-        }
+        if (!isExcludeTarget(pt,obj.classification)) {isexcludetarget = false;}
       }
 
-      if (!inside_subtype || !label_excluded) {
-        objects_filtered.objects.push_back(obj);
-      }
-    }catch(const std::exception & e){
-            RCLCPP_WARN(get_logger(), "label exclude failed");
-            continue;        
-    }
+      if (!isexcludetarget) {objects_filtered.objects.push_back(obj);}
     }
 
     object_pub_->publish(objects_filtered);

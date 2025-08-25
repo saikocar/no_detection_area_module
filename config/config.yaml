@@ -3,8 +3,9 @@
     map_topic: "/map/vector_map"
     input_objects_topic: "/objects_in"
     output_objects_topic: "/objects_out"
-    target_subtype: "no_detection_area"
-    excluded_labels: [0, 1, 2, 3, 4]
+    target_subtype: ["no_detection_area","no_detection_area_pedestrian"]
+    #二次元配列に対応できないので文字列として渡してノード側で解釈する
+    excluded_labels: "[[0, 1, 2, 3, 4],[7]]"
       
       #const uint8 UNKNOWN = 0;
       #const uint8 CAR = 1;
