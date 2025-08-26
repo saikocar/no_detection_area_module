@@ -38,7 +38,7 @@ private:
   rclcpp::Subscription<autoware_auto_perception_msgs::msg::TrackedObjects>::SharedPtr object_sub_;
   rclcpp::Publisher<autoware_auto_perception_msgs::msg::TrackedObjects>::SharedPtr object_pub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr pose_sub_;
-  std::vector<std::vector<int64_t>> excluded_labels_;
+  std::map<std::string, std::vector<int64_t>> excluded_labels_;
   std::vector<lanelet::ConstLanelet> lanelet_map_;
   std::vector<lanelet::ConstLanelet> lanelet_map_near_;
   std::string map_topic_, input_objects_topic_, output_objects_topic_,pose_topic_;
@@ -52,20 +52,14 @@ public:
     declare_parameter<std::string>("map_topic", "/map/vector_map");
     declare_parameter<std::string>("input_objects_topic", "/objects_in");
     declare_parameter<std::string>("output_objects_topic", "/objects_out");
-    declare_parameter<std::vector<std::string>>("target_subtype", {"no_detection_area"});
     declare_parameter<std::string>("pose_topic", "/localization/kinematic_state");
-    declare_parameter<std::string>("excluded_labels", "[]");
+    declare_parameter<std::string>("excluded_labels", "{}");
     
     map_topic_ = get_parameter("map_topic").as_string();
     input_objects_topic_ = get_parameter("input_objects_topic").as_string();
     output_objects_topic_ = get_parameter("output_objects_topic").as_string();
-    target_subtype_ = get_parameter("target_subtype").as_string_array();
     pose_topic_ = get_parameter("pose_topic").as_string();
-    try {
-      excluded_labels_ = nlohmann::json::parse(get_parameter("excluded_labels").as_string()).get<std::vector<std::vector<int64_t>>>();
-    } catch (const std::exception & e) {
-      RCLCPP_ERROR(get_logger(), "Failed to parse excluded_labels: %s", e.what());
-    }
+    excluded_labels_ = nlohmann::json::parse(get_parameter("excluded_labels").as_string()).get<std::map<std::string, std::vector<int64_t>>>();
     map_sub_ = create_subscription<autoware_auto_mapping_msgs::msg::HADMapBin>(
      map_topic_, rclcpp::QoS(1).transient_local().reliable(), std::bind(&ObjectExcludeOnLaneletChecker::mapCallback, this, _1));
 
@@ -118,18 +112,34 @@ private:
     }
   }
   bool isExcludeTarget(const lanelet::BasicPoint2d & pt,const std::vector<autoware_auto_perception_msgs::msg::ObjectClassification> & classifications) const {
-    if (target_subtype_.size() == 0){return false;}
+    // 除外設定が無い場合は除外しない
+    if (excluded_labels_.empty()) {return false;}
+
     for (const auto & cls : classifications) {
-      uint8_t label = cls.label;
-      for (const auto & lanelet : lanelet_map_near_){
-        for(int i = 0;i<target_subtype_.size();i++){
-          for (const auto & group : excluded_labels_) {
-            if (lanelet::geometry::within(pt, lanelet.polygon2d()) && (std::find(group.begin(), group.end(), label) != group.end())) {return false;}
+      const uint8_t label = cls.label;
+      for (const auto & lanelet : lanelet_map_near_) {
+        // 条件1: pt が lanelet の範囲内にある
+        if (!lanelet::geometry::within(pt, lanelet.polygon2d())) {
+          continue;
+        }
+
+        // lanelet の subtype を取得
+        const std::string subtype = lanelet.attributeOr("subtype", "");
+
+        // 条件2: subtype が excluded_labels_ に登録されているか
+        auto it = excluded_labels_.find(subtype);
+        if (it != excluded_labels_.end()) {
+          const auto & labels = it->second;
+          // cls.label が対応するラベル群に含まれているか
+          //1回みつかれば除外が確定
+          if (std::find(labels.begin(), labels.end(),
+                        static_cast<int64_t>(label)) != labels.end()) {
+            return true;
           }
         }
       }
     }
-    return true;
+    return false;
   }
 
 
